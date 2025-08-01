@@ -13,9 +13,14 @@ interface YouTubeSearchResult {
 
 interface YouTubeSearchBarProps {
   onSelect: (result: YouTubeSearchResult) => void;
+  currentSong?: {
+    title: string;
+    channel: string;
+  };
+  onQuotaExceeded?: (exceeded: boolean) => void;
 }
 
-export const YouTubeSearchBar: React.FC<YouTubeSearchBarProps> = ({ onSelect }) => {
+export const YouTubeSearchBar: React.FC<YouTubeSearchBarProps> = ({ onSelect, currentSong, onQuotaExceeded }) => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<YouTubeSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -24,61 +29,12 @@ export const YouTubeSearchBar: React.FC<YouTubeSearchBarProps> = ({ onSelect }) 
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-
-  // Fetch YouTube search suggestions
-  const fetchSuggestions = async (searchTerm: string) => {
-    if (!searchTerm.trim() || searchTerm.length < 2) {
-      setSuggestions([]);
-      return;
-    }
-
-    setLoadingSuggestions(true);
-    try {
-      // Use YouTube Data API search to get video titles as suggestions
-      const res = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(searchTerm)}&key=${YOUTUBE_API_KEY}`
-      );
-      
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
-      
-      const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        const titles = data.items.map((item: any) => item.snippet.title);
-        setSuggestions(titles);
-      } else {
-        setSuggestions([]);
-      }
-    } catch (err) {
-      console.error('Error fetching suggestions:', err);
-      setSuggestions([]);
-    } finally {
-      setLoadingSuggestions(false);
-    }
-  };
-
-  // Debounced search suggestions
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (query.trim()) {
-        fetchSuggestions(query);
-      } else {
-        setSuggestions([]);
-      }
-    }, 300);
-
-    return () => clearTimeout(timeoutId);
-  }, [query]);
+  const [contextualSuggestions, setContextualSuggestions] = useState<string[]>([]);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
-    
-    // Add to recent searches
-    if (!recentSearches.includes(query)) {
-      setRecentSearches(prev => [query, ...prev.slice(0, 4)]);
-    }
     
     setLoading(true);
     setError("");
@@ -87,19 +43,35 @@ export const YouTubeSearchBar: React.FC<YouTubeSearchBarProps> = ({ onSelect }) 
     
     try {
       const res = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(query)}&key=${YOUTUBE_API_KEY}`
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(query + ' music song')}&videoCategoryId=10&key=${YOUTUBE_API_KEY}`
       );
       const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
+      
+      if (data.error) {
+        if (data.error.code === 403 && data.error.message.includes('quota')) {
+          setQuotaExceeded(true);
+          onQuotaExceeded?.(true);
+          throw new Error("YouTube API quota exceeded. Please try again later or contact support.");
+        } else {
+          throw new Error(data.error.message);
+        }
+      }
+      
+      if (!data.items || data.items.length === 0) {
+        setError("No music found for this search. Try a different song or artist.");
+        return;
+      }
+      
       const items = data.items.map((item: any) => ({
         videoId: item.id.videoId,
         title: item.snippet.title,
         channel: item.snippet.channelTitle,
         thumbnail: item.snippet.thumbnails.medium.url,
       }));
+      
       setResults(items);
     } catch (err: any) {
-      setError(err.message || "Failed to fetch results");
+      setError(err.message || "Failed to fetch results. Please check your internet connection.");
     } finally {
       setLoading(false);
     }
@@ -110,52 +82,23 @@ export const YouTubeSearchBar: React.FC<YouTubeSearchBarProps> = ({ onSelect }) 
     setResults([]);
     setError("");
     setShowSuggestions(false);
-    setSuggestions([]);
-  };
-
-  const handleSuggestionClick = (suggestion: string) => {
-    setQuery(suggestion);
-    setShowSuggestions(false);
-    // Auto-search when suggestion is clicked
-    setTimeout(() => {
-      const form = document.querySelector('form');
-      if (form) {
-        const submitEvent = new Event('submit', { bubbles: true, cancelable: true });
-        form.dispatchEvent(submitEvent);
-      }
-    }, 100);
-  };
-
-  const handleInputFocus = () => {
-    if (query.trim() || recentSearches.length > 0) {
-      setShowSuggestions(true);
-    }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);
-    if (e.target.value.trim() || recentSearches.length > 0) {
-      setShowSuggestions(true);
-    } else {
-      setShowSuggestions(false);
-    }
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto my-4 relative">
-      <form
-        onSubmit={handleSearch}
-        className="flex items-center justify-center"
-      >
-        <div className="flex flex-1 items-center rounded-2xl bg-black/40 border border-white/20 backdrop-blur-lg shadow-2xl px-6 py-3 gap-2 focus-within:ring-2 focus-within:ring-blue-400 transition-all">
-          <Search className="text-white w-5 h-5 mr-2" />
+    <div className="w-full relative">
+      <form onSubmit={handleSearch} className="flex items-center">
+        <div className="flex flex-1 items-center rounded-full bg-white/10 backdrop-blur-lg px-4 py-3 gap-3 focus-within:ring-2 focus-within:ring-blue-400 transition-all">
+          <Search className="text-white w-5 h-5" />
           <input
             type="text"
-            className="flex-1 bg-transparent outline-none text-white placeholder:text-white/70 text-lg font-medium"
-            placeholder="Search YouTube for music..."
+            className="flex-1 bg-transparent outline-none text-white placeholder:text-white/70 text-base font-medium"
+            placeholder="Search for songs, artists, or albums..."
             value={query}
             onChange={handleInputChange}
-            onFocus={handleInputFocus}
           />
           {query && (
             <button
@@ -163,89 +106,87 @@ export const YouTubeSearchBar: React.FC<YouTubeSearchBarProps> = ({ onSelect }) 
               onClick={handleClear}
               className="text-white/70 hover:text-white transition-colors p-1"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           )}
           <button
             type="submit"
-            className="ml-2 px-5 py-2 rounded-xl bg-blue-600 text-white font-semibold text-lg shadow hover:bg-blue-700 transition-all"
+            className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium text-sm transition-all"
           >
             Search
           </button>
         </div>
       </form>
 
-      {/* Search Suggestions */}
-      {showSuggestions && (
-        <div className="absolute top-full left-0 right-0 mt-2 bg-black/40 border border-white/20 backdrop-blur-lg rounded-2xl shadow-2xl z-20">
-          {/* Recent Searches */}
-          {recentSearches.length > 0 && !query && (
-            <div className="p-4 border-b border-white/10">
-              <div className="flex items-center gap-2 mb-3 text-white/70">
-                <Clock className="w-4 h-4" />
-                <span className="text-sm font-medium">Recent searches</span>
-              </div>
-              <div className="space-y-2">
-                {recentSearches.map((search, index) => (
-                  <button
-                    key={index}
-                    onClick={() => handleSuggestionClick(search)}
-                    className="w-full text-left text-white hover:bg-white/10 rounded-lg px-3 py-2 transition-colors"
-                  >
-                    {search}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* YouTube Suggestions */}
-          {query && (
-            <div className="p-4">
-              <div className="flex items-center gap-2 mb-3 text-white/70">
-                <TrendingUp className="w-4 h-4" />
-                <span className="text-sm font-medium">
-                  {loadingSuggestions ? "Loading suggestions..." : "YouTube suggestions"}
-                </span>
-              </div>
-              <div className="space-y-2">
-                {suggestions.map((suggestion, index) => (
-                  <button
-                    key={index}
-                    onClick={() => handleSuggestionClick(suggestion)}
-                    className="w-full text-left text-white hover:bg-white/10 rounded-lg px-3 py-2 transition-colors"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-                {suggestions.length === 0 && !loadingSuggestions && query.length >= 2 && (
-                  <div className="text-white/50 text-sm px-3 py-2">
-                    No suggestions found
-                  </div>
-                )}
-              </div>
+      {loading && (
+        <div className="text-center text-white mt-4 py-8">
+          <div className="inline-block w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin mb-2"></div>
+          <div className="text-white/70">Searching for music...</div>
+        </div>
+      )}
+      {error && (
+        <div className="text-red-300 text-center mb-2 mt-4 p-4 bg-red-500/10 rounded-lg border border-red-500/20">
+          <div className="mb-2">{error}</div>
+          {error.includes('quota') && (
+            <div className="text-sm text-red-200">
+              <p>💡 Try these alternatives:</p>
+              <ul className="mt-2 space-y-1 text-left">
+                <li>• Use the trending songs section below</li>
+                <li>• Try searching for popular artists</li>
+                <li>• Check back later when quota resets</li>
+              </ul>
             </div>
           )}
         </div>
       )}
-
-      {loading && <div className="text-center text-white mt-2">Searching...</div>}
-      {error && <div className="text-red-300 text-center mb-2 mt-2">{error}</div>}
-      <ul className="space-y-2 mt-4">
-        {results.map(result => (
-          <li
-            key={result.videoId}
-            className="flex items-center gap-4 p-2 bg-black/40 border border-white/10 rounded-xl shadow-md cursor-pointer hover:bg-blue-900/40 backdrop-blur-lg"
-            onClick={() => onSelect(result)}
-          >
-            <img src={result.thumbnail} alt={result.title} className="w-20 h-12 object-cover rounded" />
-            <div>
-              <div className="font-semibold text-white">{result.title}</div>
-              <div className="text-sm text-white/70">{result.channel}</div>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {results.length > 0 && (
+        <div className="mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-white font-semibold">Search Results</h3>
+            <span className="text-white/70 text-sm">{results.length} songs found</span>
+          </div>
+          <div className="grid gap-3">
+            {results.map(result => (
+              <div
+                key={result.videoId}
+                className="flex items-center gap-4 p-4 bg-white/5 hover:bg-white/10 rounded-xl cursor-pointer transition-all group border border-white/10"
+                onClick={() => onSelect(result)}
+              >
+                <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0">
+                  <img 
+                    src={result.thumbnail} 
+                    alt={result.title} 
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-white truncate group-hover:text-blue-300 transition-colors">
+                    {result.title}
+                  </div>
+                  <div className="text-sm text-white/70 truncate">{result.channel}</div>
+                </div>
+                <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center group-hover:bg-blue-500/20 transition-colors">
+                  <div className="w-3 h-3 bg-white rounded"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {!loading && results.length === 0 && query && !error && (
+        <div className="text-center text-white/70 mt-4 py-8">
+          <div className="text-lg mb-2">No music found</div>
+          <div className="text-sm">Try searching for a different song or artist</div>
+        </div>
+      )}
+      
+      {quotaExceeded && (
+        <div className="text-center text-white/70 mt-4 py-8">
+          <div className="text-lg mb-2">🎵 Explore Trending Songs</div>
+          <div className="text-sm">Since search is temporarily unavailable, check out the trending songs below!</div>
+        </div>
+      )}
     </div>
   );
-}; 
+};
+

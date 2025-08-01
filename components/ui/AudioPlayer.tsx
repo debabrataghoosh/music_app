@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, RotateCcw } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, RotateCcw, Music } from "lucide-react";
 import { YOUTUBE_API_KEY } from "@/app/youtube-search-config";
 
 interface AudioPlayerProps {
@@ -10,12 +10,14 @@ interface AudioPlayerProps {
   channel: string;
   onNext?: (video: any) => void;
   onPrevious?: () => void;
+  onRelatedVideosFetched?: (videos: RelatedVideo[]) => void;
 }
 
 interface RelatedVideo {
   videoId: string;
   title: string;
   channel: string;
+  thumbnail?: string;
 }
 
 declare global {
@@ -30,7 +32,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   title, 
   channel, 
   onNext, 
-  onPrevious 
+  onPrevious,
+  onRelatedVideosFetched
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -49,6 +52,90 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [originalPlaylist, setOriginalPlaylist] = useState<RelatedVideo[]>([]);
   const playerRef = useRef<any>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Extract key search terms from video title for better related video search
+  const extractSearchTerms = (title: string): string[] => {
+    // Remove common words that don't help with search
+    const stopWords = ['official', 'video', 'audio', 'lyrics', 'song', 'music', 'ft', 'feat', 'featuring', 'remix', 'cover', 'live', 'version', 'hq', 'hd', '4k', '1080p', '720p'];
+    
+    // Clean the title
+    let cleanTitle = title.toLowerCase()
+      .replace(/[^\w\s]/g, ' ') // Remove special characters
+      .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+      .trim();
+    
+    // Split into words and filter out stop words
+    const words = cleanTitle.split(' ')
+      .filter(word => word.length > 2 && !stopWords.includes(word))
+      .slice(0, 4); // Take first 4 meaningful words
+    
+    // If we don't have enough words, add some generic music terms
+    if (words.length < 2) {
+      words.push('music', 'song');
+    }
+    
+    return words;
+  };
+
+  // Filter videos to ensure they are music content and diverse
+  const isMusicVideo = (title: string, channel: string, currentTitle?: string): boolean => {
+    const titleLower = title.toLowerCase();
+    const channelLower = channel.toLowerCase();
+    const currentTitleLower = currentTitle?.toLowerCase() || '';
+    
+    // Keywords that indicate music content
+    const musicKeywords = [
+      'music', 'song', 'audio', 'lyrics', 'official', 'music video', 'mv', 'track',
+      'album', 'single', 'release', 'feat', 'featuring', 'ft', 'cover',
+      'live', 'concert', 'performance', 'studio', 'recording'
+    ];
+    
+    // Keywords that indicate non-music content (to exclude)
+    const nonMusicKeywords = [
+      'tutorial', 'how to', 'review', 'news', 'interview', 'podcast', 'vlog',
+      'gaming', 'gameplay', 'walkthrough', 'guide', 'tips', 'tricks',
+      'cooking', 'recipe', 'food', 'travel', 'vlog', 'daily', 'life',
+      'comedy', 'sketch', 'prank', 'challenge', 'reaction'
+    ];
+    
+    // Keywords that indicate remixes/variations (to exclude for diversity)
+    const remixKeywords = [
+      'remix', 'remix zone', 'dance remix', 'party remix', 'club remix',
+      'mashup', 'mash up', 'mix', 'dance mix', 'party mix',
+      'cover', 'cover song', 'cover version', 'karaoke', 'instrumental',
+      'acoustic', 'unplugged', 'live version', 'live performance',
+      'dance', 'dance song', 'dance music', 'party song', 'party music'
+    ];
+    
+    // Check if title contains music keywords
+    const hasMusicKeywords = musicKeywords.some(keyword => 
+      titleLower.includes(keyword)
+    );
+    
+    // Check if title contains non-music keywords
+    const hasNonMusicKeywords = nonMusicKeywords.some(keyword => 
+      titleLower.includes(keyword)
+    );
+    
+    // Check if title contains remix/variation keywords
+    const hasRemixKeywords = remixKeywords.some(keyword => 
+      titleLower.includes(keyword)
+    );
+    
+    // Check if it's too similar to current song (exclude variations of same song)
+    const isSimilarToCurrent = currentTitleLower && (
+      titleLower.includes(currentTitleLower.split(' ')[0]) && 
+      titleLower.includes(currentTitleLower.split(' ')[1])
+    );
+    
+    // Check if channel name suggests music content
+    const isMusicChannel = musicKeywords.some(keyword => 
+      channelLower.includes(keyword)
+    );
+    
+    // Return true if it's likely music content, not remix, and different from current
+    return hasMusicKeywords && !hasNonMusicKeywords && !hasRemixKeywords && !isSimilarToCurrent;
+  };
 
   // Fetch related videos from YouTube
   const fetchRelatedVideos = async (videoId: string) => {
@@ -83,53 +170,82 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         return;
       }
 
-      // Use search API instead of relatedToVideoId for better compatibility
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&q=${encodeURIComponent(currentVideoTitle)}&key=${YOUTUBE_API_KEY}`;
-      console.log('API URL:', url);
+      // Create a more diverse search query by extracting key terms from the title
+      const searchTerms = extractSearchTerms(currentVideoTitle);
+      const searchQuery = searchTerms.join(' ');
       
-      const res = await fetch(url);
-      console.log('API Response status:', res.status);
+      // Try multiple search strategies focused on diverse music content
+      const searchStrategies = [
+        // Strategy 1: Search by artist/channel for different songs
+        currentVideoChannel !== 'Unknown' ? 
+          `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(currentVideoChannel + ' official music')}&videoCategoryId=10&key=${YOUTUBE_API_KEY}` : null,
+        // Strategy 2: Search by genre/style based on title
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(searchQuery + ' official music song')}&videoCategoryId=10&key=${YOUTUBE_API_KEY}`,
+        // Strategy 3: Search for popular music in similar style
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=popular music 2024 official&videoCategoryId=10&key=${YOUTUBE_API_KEY}`,
+        // Strategy 4: Search for trending music
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=trending music official&videoCategoryId=10&key=${YOUTUBE_API_KEY}`
+      ].filter(Boolean);
       
-      if (res.ok) {
-        const data = await res.json();
-        console.log('API Response data:', data);
-        
-        if (data.items && data.items.length > 0) {
-          // Filter out the current video and create playlist
-          const videos = data.items
-            .filter((item: any) => item.id.videoId !== videoId) // Exclude current video
-            .map((item: any) => ({
-              videoId: item.id.videoId,
-              title: item.snippet.title,
-              channel: item.snippet.channelTitle,
-            }));
+      // Try each strategy and combine results
+      const allVideos: any[] = [];
+      
+      for (const url of searchStrategies) {
+        if (!url) continue; // Skip null URLs
+        try {
+          console.log('Trying search strategy:', url);
+          const res = await fetch(url);
           
-          console.log('Related videos fetched:', videos.length);
-          
-          if (videos.length > 0) {
-            setRelatedVideos(videos);
-            setOriginalPlaylist(videos); // Store original playlist for shuffle
-            
-            // If video has ended and we now have related videos, play next
-            if (isVideoEnded && videos.length > 0) {
-              setTimeout(() => playNextSong(), 1000);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.items && data.items.length > 0) {
+              const videos = data.items
+                .filter((item: any) => item.id.videoId !== videoId)
+                .filter((item: any) => isMusicVideo(item.snippet.title, item.snippet.channelTitle, currentVideoTitle))
+                .map((item: any) => ({
+                  videoId: item.id.videoId,
+                  title: item.snippet.title,
+                  channel: item.snippet.channelTitle,
+                  thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
+                }));
+              
+              allVideos.push(...videos);
             }
-          } else {
-            // Try generic music search as fallback
-            console.log('No related videos found, trying generic music search...');
-            await fetchGenericMusicVideos();
           }
-        } else {
-          // Try generic music search as fallback
-          console.log('No related videos found, trying generic music search...');
-          await fetchGenericMusicVideos();
+        } catch (err) {
+          console.error('Search strategy failed:', err);
+        }
+      }
+      
+      // Remove duplicates and limit results
+      const uniqueVideos = allVideos.filter((video, index, self) => 
+        index === self.findIndex(v => v.videoId === video.videoId)
+      ).slice(0, 15);
+      
+      console.log('Combined videos found:', uniqueVideos.length);
+      
+      if (uniqueVideos.length > 0) {
+        setRelatedVideos(uniqueVideos);
+        setOriginalPlaylist(uniqueVideos);
+        
+        // Notify parent component about related videos
+        if (onRelatedVideosFetched) {
+          onRelatedVideosFetched(uniqueVideos);
+        }
+        
+        // If video has ended and we now have related videos, play next
+        if (isVideoEnded && uniqueVideos.length > 0) {
+          setTimeout(() => playNextSong(), 1000);
         }
       } else {
-        const errorText = await res.text();
-        console.error('Failed to fetch related videos:', res.status, errorText);
         // Try generic music search as fallback
+        console.log('No related videos found, trying generic music search...');
         await fetchGenericMusicVideos();
       }
+      
+      return; // Exit early since we handled the response
+      
+      // This code is no longer needed since we handle the response in the loop above
     } catch (err) {
       console.error('Error fetching related videos:', err);
       createFallbackPlaylist(videoId);
@@ -139,7 +255,20 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   // Fallback function to fetch generic music videos
   const fetchGenericMusicVideos = async () => {
     try {
-      const fallbackUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&q=music&key=${YOUTUBE_API_KEY}`;
+      // Try multiple diverse music searches for better variety
+      const musicQueries = [
+        'popular music 2024 official',
+        'trending music official',
+        'top hits official music',
+        'official music videos 2024',
+        'new music releases official',
+        'best music songs 2024',
+        'official music playlist',
+        'hit songs official music'
+      ];
+      
+      const randomQuery = musicQueries[Math.floor(Math.random() * musicQueries.length)];
+      const fallbackUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=15&q=${encodeURIComponent(randomQuery)}&videoCategoryId=10&key=${YOUTUBE_API_KEY}`;
       console.log('Trying fallback search:', fallbackUrl);
       
       const fallbackRes = await fetch(fallbackUrl);
@@ -148,16 +277,23 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         if (fallbackData.items && fallbackData.items.length > 0) {
           const videos = fallbackData.items
             .filter((item: any) => item.id.videoId !== videoId)
+            .filter((item: any) => isMusicVideo(item.snippet.title, item.snippet.channelTitle, currentVideoTitle))
             .map((item: any) => ({
               videoId: item.id.videoId,
               title: item.snippet.title,
               channel: item.snippet.channelTitle,
+              thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
             }));
           
           if (videos.length > 0) {
             console.log('Fallback videos fetched:', videos.length);
             setRelatedVideos(videos);
             setOriginalPlaylist(videos);
+            
+            // Notify parent component about related videos
+            if (onRelatedVideosFetched) {
+              onRelatedVideosFetched(videos);
+            }
           } else {
             createFallbackPlaylist(videoId);
           }
@@ -600,55 +736,72 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto bg-black/40 border border-white/20 backdrop-blur-lg rounded-2xl shadow-2xl p-6">
+    <div className="w-full bg-white/5 backdrop-blur-lg rounded-xl p-4">
       {/* Hidden YouTube iframe */}
       <div ref={iframeRef} className="hidden" />
 
       {/* Track Info */}
-      <div className="text-center mb-6">
-        <h3 className="text-white text-lg font-semibold mb-1">{currentVideoTitle}</h3>
-        <p className="text-white/70 text-sm">{currentVideoChannel}</p>
+      <div className="flex items-center gap-4 mb-4">
+        {/* Thumbnail */}
+        <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0">
+          <img 
+            src={`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`}
+            alt={currentVideoTitle}
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              // Fallback to a default music icon if thumbnail fails
+              const target = e.target as HTMLImageElement;
+              target.style.display = 'none';
+              target.nextElementSibling?.classList.remove('hidden');
+            }}
+          />
+          <div className="w-16 h-16 bg-blue-600/20 rounded-lg flex items-center justify-center hidden">
+            <Music className="w-6 h-6 text-blue-400" />
+          </div>
+        </div>
+        
+        {/* Song Info */}
+        <div className="flex-1 min-w-0">
+          <h3 className="text-white font-semibold truncate">{currentVideoTitle}</h3>
+          <p className="text-white/70 text-sm truncate">{currentVideoChannel}</p>
+        </div>
         
         {/* Mode Status */}
-        <div className="flex items-center justify-center gap-2 mt-2">
+        <div className="flex items-center gap-1">
           {repeatMode !== 'none' && (
             <span className="text-xs px-2 py-1 bg-blue-500/20 text-blue-300 rounded-full">
-              {repeatMode === 'one' ? '🔂 Repeat One' : '🔁 Repeat All'}
+              {repeatMode === 'one' ? '🔂' : '🔁'}
             </span>
           )}
           {shuffleMode && (
             <span className="text-xs px-2 py-1 bg-purple-500/20 text-purple-300 rounded-full">
-              🔀 Shuffle
-            </span>
-          )}
-          {loopMode && (
-            <span className="text-xs px-2 py-1 bg-green-500/20 text-green-300 rounded-full">
-              🔄 Loop
+              🔀
             </span>
           )}
         </div>
-        
-        {relatedVideos.length > 0 && (
-          <p className="text-white/50 text-xs mt-1">
-            🎵 Auto-play enabled • {relatedVideos.length} related songs
-          </p>
-        )}
-        {relatedVideos.length === 0 && !isVideoEnded && (
-          <p className="text-white/50 text-xs mt-1">
-            ⏳ Loading related songs...
-          </p>
-        )}
-        {relatedVideos.length === 0 && isVideoEnded && !loopMode && (
-          <p className="text-yellow-400 text-xs mt-1">
-            ⚠️ Auto-play paused - no related songs found
-          </p>
-        )}
-        {relatedVideos.length === 0 && isVideoEnded && loopMode && (
-          <p className="text-green-400 text-xs mt-1">
-            🔄 Loop mode active - current song will repeat
-          </p>
-        )}
       </div>
+      
+      {/* Status Messages */}
+      {relatedVideos.length > 0 && (
+        <p className="text-white/50 text-xs mt-1">
+          🎵 Auto-play enabled • {relatedVideos.length} related songs
+        </p>
+      )}
+      {relatedVideos.length === 0 && !isVideoEnded && (
+        <p className="text-white/50 text-xs mt-1">
+          ⏳ Loading related songs...
+        </p>
+      )}
+      {relatedVideos.length === 0 && isVideoEnded && !loopMode && (
+        <p className="text-yellow-400 text-xs mt-1">
+          ⚠️ Auto-play paused - no related songs found
+        </p>
+      )}
+      {relatedVideos.length === 0 && isVideoEnded && loopMode && (
+        <p className="text-green-400 text-xs mt-1">
+          🔄 Loop mode active - current song will repeat
+        </p>
+      )}
 
       {/* Progress Bar */}
       <div className="mb-4">

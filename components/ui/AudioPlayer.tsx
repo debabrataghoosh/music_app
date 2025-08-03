@@ -1,13 +1,15 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, RotateCcw, Music } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, RotateCcw, Music, ThumbsUp, ThumbsDown, MoreVertical, ChevronDown } from "lucide-react";
 import { YOUTUBE_API_KEY } from "@/app/youtube-search-config";
 
 interface AudioPlayerProps {
   videoId: string;
   title: string;
   channel: string;
+  viewCount?: string;
+  likeCount?: string;
   onNext?: (video: any) => void;
   onPrevious?: () => void;
   onRelatedVideosFetched?: (videos: RelatedVideo[]) => void;
@@ -31,6 +33,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   videoId, 
   title, 
   channel, 
+  viewCount = '0',
+  likeCount = '0',
   onNext, 
   onPrevious,
   onRelatedVideosFetched
@@ -50,6 +54,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [shuffleMode, setShuffleMode] = useState(false);
   const [loopMode, setLoopMode] = useState(false);
   const [originalPlaylist, setOriginalPlaylist] = useState<RelatedVideo[]>([]);
+  const [isLiked, setIsLiked] = useState(false);
+  const [isDisliked, setIsDisliked] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
   const playerRef = useRef<any>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -243,7 +250,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         await fetchGenericMusicVideos();
       }
       
-      return; // Exit early since we handled the response
+      return; // Exit early since we handled the response in the loop above
       
       // This code is no longer needed since we handle the response in the loop above
     } catch (err) {
@@ -681,10 +688,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const togglePlayPause = () => {
     if (isPlayerReady()) {
       if (isPlaying) {
-        playerRef.current.pauseVideo();
+        playerRef.current?.pauseVideo();
       } else {
-        playerRef.current.playVideo();
+        playerRef.current?.playVideo();
       }
+      setIsPlaying(!isPlaying);
     } else {
       console.log('Player not ready for play/pause');
       // If player is not ready, try to initialize it
@@ -703,21 +711,35 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setIsMuted(newVolume === 0);
     
     if (isPlayerReady()) {
-      playerRef.current.setVolume(newVolume * 100);
+      playerRef.current?.setVolume(newVolume * 100);
     }
   };
 
   const toggleMute = () => {
     if (isPlayerReady()) {
       if (isMuted) {
-        playerRef.current.unMute();
+        playerRef.current?.unMute();
         setVolume(1);
       } else {
-        playerRef.current.mute();
+        playerRef.current?.mute();
         setVolume(0);
       }
       setIsMuted(!isMuted);
     }
+  };
+
+  const handleLike = () => {
+    setIsLiked(!isLiked);
+    if (isDisliked) setIsDisliked(false);
+  };
+
+  const handleDislike = () => {
+    setIsDisliked(!isDisliked);
+    if (isLiked) setIsLiked(false);
+  };
+
+  const toggleMinimize = () => {
+    setIsMinimized(!isMinimized);
   };
 
   const formatTime = (seconds: number) => {
@@ -731,221 +753,157 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setCurrentTime(newTime);
     
     if (isPlayerReady()) {
-      playerRef.current.seekTo(newTime, true);
+      playerRef.current?.seekTo(newTime, true);
     }
   };
 
-  return (
-    <div className="w-full bg-white/5 backdrop-blur-lg rounded-xl p-4">
-      {/* Hidden YouTube iframe */}
-      <div ref={iframeRef} className="hidden" />
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    const newTime = percentage * duration;
+    playerRef.current?.seekTo(newTime, true);
+  };
 
-      {/* Track Info */}
-      <div className="flex items-center gap-4 mb-4">
-        {/* Thumbnail */}
-        <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0">
-          <img 
-            src={`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`}
-            alt={currentVideoTitle}
-            className="w-full h-full object-cover"
-            onError={(e) => {
-              // Fallback to a default music icon if thumbnail fails
-              const target = e.target as HTMLImageElement;
-              target.style.display = 'none';
-              target.nextElementSibling?.classList.remove('hidden');
-            }}
-          />
-          <div className="w-16 h-16 bg-blue-600/20 rounded-lg flex items-center justify-center hidden">
-            <Music className="w-6 h-6 text-blue-400" />
+  // Format view count
+  const formatViewCount = (count: string) => {
+    const num = parseInt(count);
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`;
+    } else if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`;
+    }
+    return num.toString();
+  };
+
+  // Format like count
+  const formatLikeCount = (count: string) => {
+    const num = parseInt(count);
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`;
+    } else if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`;
+    }
+    return num.toString();
+  };
+
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-50 bg-gray-900/95 backdrop-blur-lg border-t border-gray-700/50">
+      {/* Progress Bar */}
+      <div className="w-full h-1 bg-gray-700 relative cursor-pointer group" onClick={handleProgressClick}>
+        <div 
+          className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 transition-all duration-300 ease-out group-hover:from-blue-400 group-hover:via-purple-400 group-hover:to-pink-400"
+          style={{ 
+            width: `${(currentTime / duration) * 100}%`,
+            transition: 'width 0.3s ease-out, background 0.2s ease-out'
+          }}
+        />
+        {/* Hover indicator */}
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-20 bg-white transition-opacity duration-200" />
+      </div>
+
+      {/* Player Content */}
+      <div className="flex items-center justify-between px-4 py-3">
+        {/* Left Section - Controls and Time */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onPrevious}
+              className="text-white/70 hover:text-white transition-colors p-1"
+            >
+              <SkipBack className="w-5 h-5" />
+            </button>
+            <button
+              onClick={togglePlayPause}
+              className="text-white hover:text-white transition-colors p-1"
+            >
+              {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
+            </button>
+            <button
+              onClick={onNext}
+              className="text-white/70 hover:text-white transition-colors p-1"
+            >
+              <SkipForward className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="text-white/70 text-sm">
+            {formatTime(currentTime)} / {formatTime(duration)}
           </div>
         </div>
-        
-        {/* Song Info */}
-        <div className="flex-1 min-w-0">
-          <h3 className="text-white font-semibold truncate">{currentVideoTitle}</h3>
-          <p className="text-white/70 text-sm truncate">{currentVideoChannel}</p>
-        </div>
-        
-        {/* Mode Status */}
-        <div className="flex items-center gap-1">
-          {repeatMode !== 'none' && (
-            <span className="text-xs px-2 py-1 bg-blue-500/20 text-blue-300 rounded-full">
-              {repeatMode === 'one' ? '🔂' : '🔁'}
-            </span>
-          )}
-          {shuffleMode && (
-            <span className="text-xs px-2 py-1 bg-purple-500/20 text-purple-300 rounded-full">
-              🔀
-            </span>
-          )}
-        </div>
-      </div>
-      
-      {/* Status Messages */}
-      {relatedVideos.length > 0 && (
-        <p className="text-white/50 text-xs mt-1">
-          🎵 Auto-play enabled • {relatedVideos.length} related songs
-        </p>
-      )}
-      {relatedVideos.length === 0 && !isVideoEnded && (
-        <p className="text-white/50 text-xs mt-1">
-          ⏳ Loading related songs...
-        </p>
-      )}
-      {relatedVideos.length === 0 && isVideoEnded && !loopMode && (
-        <p className="text-yellow-400 text-xs mt-1">
-          ⚠️ Auto-play paused - no related songs found
-        </p>
-      )}
-      {relatedVideos.length === 0 && isVideoEnded && loopMode && (
-        <p className="text-green-400 text-xs mt-1">
-          🔄 Loop mode active - current song will repeat
-        </p>
-      )}
 
-      {/* Progress Bar */}
-      <div className="mb-4">
-        <div className="flex justify-between text-white/70 text-xs mb-2">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
+        {/* Middle Section - Song Info and Engagement */}
+        <div className="flex items-center gap-3 flex-1 max-w-md">
+          <div className="w-12 h-12 rounded overflow-hidden bg-gray-800 flex-shrink-0">
+            <img 
+              src={`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`}
+              alt={currentVideoTitle}
+              className="w-full h-full object-cover"
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-medium truncate">{currentVideoTitle}</div>
+            <div className="text-white/70 text-sm truncate">{currentVideoChannel}</div>
+          </div>
+          <div className="flex items-center gap-2 text-white/70">
+            <span className="text-xs">{formatViewCount(viewCount)} views</span>
+            <span className="text-xs">{formatLikeCount(likeCount)} likes</span>
+            <button
+              onClick={handleLike}
+              className={`p-1 transition-colors ${isLiked ? 'text-green-500' : 'hover:text-white'}`}
+            >
+              <ThumbsUp className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleDislike}
+              className={`p-1 transition-colors ${isDisliked ? 'text-red-500' : 'hover:text-white'}`}
+            >
+              <ThumbsDown className="w-4 h-4" />
+            </button>
+            <button className="p-1 hover:text-white transition-colors">
+              <MoreVertical className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-        <input
-          type="range"
-          min="0"
-          max={duration || 100}
-          value={currentTime}
-          onChange={handleProgressChange}
-          className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer slider"
-        />
-      </div>
 
-      {/* Controls */}
-      <div className="flex items-center justify-center gap-4 mb-4">
-        {/* Mode Controls */}
-        <div className="flex items-center gap-2">
+        {/* Right Section - Volume and Options */}
+        <div className="flex items-center gap-3">
           <button
-            onClick={toggleRepeatMode}
-            className={`p-2 transition-colors ${
-              repeatMode === 'none' 
-                ? 'text-white/30' 
-                : repeatMode === 'one'
-                ? 'text-blue-400'
-                : 'text-green-400'
-            } hover:text-white`}
-            title={`Repeat: ${repeatMode === 'none' ? 'Off' : repeatMode === 'one' ? 'One' : 'All'}`}
+            onClick={() => setIsMuted(!isMuted)}
+            className="text-white/70 hover:text-white transition-colors p-1"
           >
-            <Repeat className="w-5 h-5" />
+            {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
           </button>
-          
           <button
-            onClick={toggleShuffleMode}
-            className={`p-2 transition-colors ${
-              shuffleMode ? 'text-blue-400' : 'text-white/30'
-            } hover:text-white`}
-            title={`Shuffle: ${shuffleMode ? 'On' : 'Off'}`}
+            onClick={() => setShuffleMode(!shuffleMode)}
+            className={`p-1 transition-colors ${shuffleMode ? 'text-blue-500' : 'text-white/70 hover:text-white'}`}
           >
             <Shuffle className="w-5 h-5" />
           </button>
-          
           <button
-            onClick={toggleLoopMode}
-            className={`p-2 transition-colors ${
-              loopMode ? 'text-green-400' : 'text-white/30'
-            } hover:text-white`}
-            title={`Loop: ${loopMode ? 'On' : 'Off'}`}
+            onClick={() => setRepeatMode(repeatMode === 'none' ? 'all' : repeatMode === 'all' ? 'one' : 'none')}
+            className={`p-1 transition-colors ${repeatMode !== 'none' ? 'text-blue-500' : 'text-white/70 hover:text-white'}`}
           >
-            <RotateCcw className="w-5 h-5" />
+            <Repeat className="w-5 h-5" />
+          </button>
+          <button
+            onClick={toggleMinimize}
+            className="text-white/70 hover:text-white transition-colors p-1"
+          >
+            <ChevronDown className="w-5 h-5" />
           </button>
         </div>
-        
-        {/* Playback Controls */}
-        <button
-          onClick={() => {
-            console.log('Previous button clicked!');
-            console.log('Related videos:', relatedVideos);
-            console.log('Current index:', currentVideoIndex);
-            if (!isLoading) {
-              playPreviousSong();
-            }
-          }}
-          className={`p-2 transition-colors ${
-            isLoading 
-              ? 'text-white/30 cursor-not-allowed' 
-              : 'text-white/70 hover:text-white'
-          }`}
-          disabled={relatedVideos.length === 0 || isLoading}
-        >
-          <SkipBack className="w-6 h-6" />
-        </button>
-        
-        <button
-          onClick={togglePlayPause}
-          className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors"
-        >
-          {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8" />}
-        </button>
-        
-        <button
-          onClick={() => {
-            console.log('Next button clicked!');
-            console.log('Related videos:', relatedVideos);
-            console.log('Current index:', currentVideoIndex);
-            if (!isLoading) {
-              playNextSong();
-            }
-          }}
-          className={`p-2 transition-colors ${
-            isLoading 
-              ? 'text-white/30 cursor-not-allowed' 
-              : 'text-white/70 hover:text-white'
-          }`}
-          disabled={relatedVideos.length === 0 || isLoading}
-        >
-          {isLoading ? (
-            <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          ) : (
-            <SkipForward className="w-6 h-6" />
-          )}
-        </button>
       </div>
 
-      {/* Volume Control */}
-      <div className="flex items-center justify-center gap-3">
-        <button
-          onClick={toggleMute}
-          className="text-white/70 hover:text-white transition-colors"
-        >
-          {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-        </button>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.1"
-          value={isMuted ? 0 : volume}
-          onChange={handleVolumeChange}
-          className="w-24 h-2 bg-white/20 rounded-lg appearance-none cursor-pointer slider"
-        />
-      </div>
-
-      <style jsx>{`
-        .slider::-webkit-slider-thumb {
-          appearance: none;
-          height: 16px;
-          width: 16px;
-          border-radius: 50%;
-          background: #3b82f6;
-          cursor: pointer;
-        }
-        .slider::-moz-range-thumb {
-          height: 16px;
-          width: 16px;
-          border-radius: 50%;
-          background: #3b82f6;
-          cursor: pointer;
-          border: none;
-        }
-      `}</style>
+      {/* Hidden iframe for YouTube API */}
+      <iframe
+        ref={iframeRef}
+        src={`https://www.youtube.com/embed/${videoId}?autoplay=1&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=0&disablekb=1&playsinline=1&enablejsapi=1&origin=${window.location.origin}`}
+        title="YouTube audio player"
+        frameBorder="0"
+        allow="autoplay; encrypted-media"
+        allowFullScreen
+        className="hidden"
+      />
     </div>
   );
 };

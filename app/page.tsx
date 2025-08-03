@@ -16,6 +16,8 @@ export default function Home() {
   const [loadingTrending, setLoadingTrending] = useState(false);
   const [featuredPlaylists, setFeaturedPlaylists] = useState<any[]>([]);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const [moodSongs, setMoodSongs] = useState<any[]>([]);
+  const [selectedMood, setSelectedMood] = useState<string>('');
 
   useEffect(() => {
     setShow(false);
@@ -180,6 +182,67 @@ export default function Home() {
     setFeaturedPlaylists(playlists);
   };
 
+  // Fetch mood-based songs
+  const fetchMoodSongs = async (mood: string) => {
+    setSelectedMood(mood);
+    setLoadingTrending(true);
+    
+    const moodQueries = {
+      'Party': ['party music', 'dance songs', 'club music'],
+      'Sad': ['sad songs', 'emotional music', 'melancholy'],
+      'Sleep': ['sleep music', 'lullaby', 'relaxing songs'],
+      'Commute': ['road trip music', 'driving songs', 'commute playlist'],
+      'Work out': ['workout music', 'gym songs', 'exercise music'],
+      'Focus': ['focus music', 'study songs', 'concentration music']
+    };
+    
+    try {
+      const queries = moodQueries[mood as keyof typeof moodQueries] || ['music'];
+      const allMoodSongs: any[] = [];
+      
+      for (const query of queries.slice(0, 2)) {
+        const res = await fetch(
+          `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=6&q=${encodeURIComponent(query)}&videoCategoryId=10&key=${process.env.NEXT_PUBLIC_YOUTUBE_API_KEY}`
+        );
+        
+        if (res.ok) {
+          const data = await res.json();
+          if (data.error) {
+            if (data.error.code === 403 && data.error.message.includes('quota')) {
+              setQuotaExceeded(true);
+              break;
+            }
+            continue;
+          }
+          if (data.items && data.items.length > 0) {
+            const songs = data.items.map((item: any) => ({
+              videoId: item.id.videoId,
+              title: item.snippet.title,
+              channel: item.snippet.channelTitle,
+              thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
+            }));
+            allMoodSongs.push(...songs);
+          }
+        }
+      }
+      
+      const uniqueSongs = allMoodSongs.filter((song, index, self) => 
+        index === self.findIndex(s => s.videoId === song.videoId)
+      ).slice(0, 12);
+      
+      setMoodSongs(uniqueSongs);
+      
+      if (uniqueSongs.length === 0) {
+        setQuotaExceeded(true);
+      }
+    } catch (err) {
+      console.error('Error fetching mood songs:', err);
+      setQuotaExceeded(true);
+    } finally {
+      setLoadingTrending(false);
+    }
+  };
+
   // Fetch trending songs on component mount
   useEffect(() => {
     fetchTrendingSongs();
@@ -239,7 +302,7 @@ export default function Home() {
         {/* Main Content */}
         <div className="flex-1 flex flex-col">
           {/* Top Bar with Search */}
-          <div className="bg-black/10 backdrop-blur-lg border-b border-white/10 p-6">
+          <div className="bg-gray-900/20 backdrop-blur-lg border-b border-gray-700/30 p-6">
             <div className="max-w-4xl mx-auto">
               <YouTubeSearchBar 
                 onSelect={handleVideoSelect} 
@@ -252,8 +315,8 @@ export default function Home() {
             </div>
           </div>
           
-          {/* Content Area */}
-          <div className="flex-1 p-6 overflow-y-auto">
+          {/* Content Area with bottom padding for player */}
+          <div className="flex-1 p-6 overflow-y-auto pb-32">
             <div className="max-w-6xl mx-auto">
               {/* Welcome Section */}
               <div className="mb-8">
@@ -277,7 +340,10 @@ export default function Home() {
                   </button>
                   
                   <button
-                    onClick={() => fetchTrendingSongs()}
+                    onClick={() => {
+                      setQuotaExceeded(false);
+                      fetchTrendingSongs();
+                    }}
                     className="bg-gradient-to-r from-green-500/20 to-blue-500/20 hover:from-green-500/30 hover:to-blue-500/30 rounded-lg p-4 text-left transition-all"
                   >
                     <div className="w-8 h-8 bg-green-500/20 rounded-lg flex items-center justify-center mb-2">
@@ -309,6 +375,13 @@ export default function Home() {
                   </button>
                   
                   <button
+                    onClick={() => {
+                      // Generate random music suggestions
+                      const randomQueries = ['random music', 'surprise songs', 'mix playlist', 'viral music'];
+                      const randomQuery = randomQueries[Math.floor(Math.random() * randomQueries.length)];
+                      // This would trigger a search with random query
+                      console.log('Random mix triggered:', randomQuery);
+                    }}
                     className="bg-gradient-to-r from-orange-500/20 to-red-500/20 hover:from-orange-500/30 hover:to-red-500/30 rounded-lg p-4 text-left transition-all"
                   >
                     <div className="w-8 h-8 bg-orange-500/20 rounded-lg flex items-center justify-center mb-2">
@@ -327,25 +400,63 @@ export default function Home() {
                   {['Party', 'Sad', 'Sleep', 'Commute', 'Work out', 'Focus'].map((mood) => (
                     <button
                       key={mood}
-                      className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-full text-sm transition-colors"
+                      onClick={() => fetchMoodSongs(mood)}
+                      className={`px-4 py-2 rounded-full text-sm transition-colors ${
+                        selectedMood === mood 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-white/10 hover:bg-white/20 text-white'
+                      }`}
                     >
                       {mood}
                     </button>
                   ))}
                 </div>
+                
+                {/* Mood-based songs */}
+                {selectedMood && moodSongs.length > 0 && (
+                  <div className="mt-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-lg font-semibold text-white">{selectedMood} Songs</h4>
+                      <button 
+                        onClick={() => {
+                          setSelectedMood('');
+                          setMoodSongs([]);
+                        }}
+                        className="text-white/70 hover:text-white text-sm"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                      {moodSongs.map((song) => (
+                        <div
+                          key={song.videoId}
+                          onClick={() => handleVideoSelect(song)}
+                          className="bg-white/5 hover:bg-white/10 rounded-lg p-3 cursor-pointer transition-all group"
+                        >
+                          <div className="aspect-square rounded-lg overflow-hidden mb-3 bg-gray-800">
+                            {song.thumbnail ? (
+                              <img 
+                                src={song.thumbnail} 
+                                alt={song.title}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                                  <div className="w-4 h-4 bg-blue-400 rounded"></div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-white text-sm font-medium truncate">{song.title}</div>
+                          <div className="text-white/70 text-xs truncate">{song.channel}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-              
-              {/* Current Player */}
-              {selectedVideo && (
-                <div className="mb-8">
-                  <AudioPlayer 
-                    videoId={selectedVideo.videoId}
-                    title={selectedVideo.title}
-                    channel={selectedVideo.channel}
-                    onRelatedVideosFetched={handleRelatedVideosFetched}
-                  />
-                </div>
-              )}
               
               {/* Trending Songs Section */}
               {!selectedVideo && (
@@ -410,13 +521,17 @@ export default function Home() {
                         </div>
                       ))}
                     </div>
-                  ) : null}
-                  
-                  {!loadingTrending && trendingSongs.length === 0 && !quotaExceeded && (
+                  ) : !loadingTrending && !quotaExceeded ? (
                     <div className="text-center py-8">
-                      <div className="text-white/50 text-sm">No trending songs available</div>
+                      <div className="text-white/50 text-sm">Loading trending songs...</div>
+                      <button 
+                        onClick={() => fetchTrendingSongs()}
+                        className="mt-2 px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-white rounded-lg text-sm transition-colors"
+                      >
+                        Try Again
+                      </button>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               )}
               
@@ -491,20 +606,39 @@ export default function Home() {
               <div>
                 <h2 className="text-xl font-bold text-white mb-4">Featured playlists for you</h2>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <div key={i} className="bg-white/5 hover:bg-white/10 rounded-lg p-3 cursor-pointer transition-all">
-                      <div className="aspect-square rounded-lg overflow-hidden mb-3 bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center">
-                        <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center">
-                          <div className="w-6 h-6 bg-white rounded"></div>
-                        </div>
+                  {featuredPlaylists.map((playlist, index) => (
+                    <div
+                      key={playlist.id}
+                      onClick={() => handleVideoSelect(playlist.songs[0])}
+                      className="bg-white/5 hover:bg-white/10 rounded-lg p-3 cursor-pointer transition-all group"
+                    >
+                      <div className="aspect-square rounded-lg overflow-hidden mb-3 bg-gray-800">
+                        <img 
+                          src={playlist.thumbnail} 
+                          alt={playlist.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        />
                       </div>
-                      <div className="text-white/70 text-sm">Playlist {i + 1}</div>
+                      <div className="text-white text-sm font-medium truncate">{playlist.title}</div>
+                      <div className="text-white/70 text-xs truncate">{playlist.description}</div>
                     </div>
                   ))}
                 </div>
               </div>
             </div>
           </div>
+          
+          {/* Current Player - Always visible at bottom */}
+          {selectedVideo && (
+            <AudioPlayer 
+              videoId={selectedVideo.videoId}
+              title={selectedVideo.title}
+              channel={selectedVideo.channel}
+              viewCount={selectedVideo.viewCount}
+              likeCount={selectedVideo.likeCount}
+              onRelatedVideosFetched={handleRelatedVideosFetched}
+            />
+          )}
         </div>
       </div>
     </div>
